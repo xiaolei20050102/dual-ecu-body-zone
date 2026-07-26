@@ -62,6 +62,55 @@
           text++;
       }
   }
+
+
+#define CAN_RX_MB       4U
+#define CAN_RX_ID       0x123U
+
+static void flexcan0_init(void)
+{
+    uint32_t i;
+
+    /* CAN0 物理收发器连接到 PTE4/PTE5 */
+    PCC->PCCn[PCC_PORTE_INDEX] |= PCC_PCCn_CGC_MASK;
+    PORTE->PCR[4] = PORT_PCR_MUX(5U);   /* PTE4: CAN0_RX */
+    PORTE->PCR[5] = PORT_PCR_MUX(5U);   /* PTE5: CAN0_TX */
+
+    /* 打开 FlexCAN0 时钟 */
+    PCC->PCCn[PCC_FlexCAN0_INDEX] |= PCC_PCCn_CGC_MASK;
+
+    /* 进入冻结模式，允许配置 */
+    CAN0->MCR |= CAN_MCR_MDIS_MASK;
+    CAN0->CTRL1 &= ~CAN_CTRL1_CLKSRC_MASK; /* 使用 8 MHz 外部晶振 */
+    CAN0->MCR &= ~CAN_MCR_MDIS_MASK;
+
+    while ((CAN0->MCR & CAN_MCR_FRZACK_MASK) == 0U)
+    {
+    }
+
+    /* 8 MHz 时钟下配置为 500 kbit/s，标准 CAN */
+    CAN0->CTRL1 = 0x00DB0006U;
+
+    /* 清空 32 个消息缓冲区 */
+    for (i = 0U; i < 128U; i++)
+    {
+        CAN0->RAMn[i] = 0U;
+    }
+
+    /* 接收缓冲区 4：只接收标准 ID 0x123 */
+    CAN0->RXIMR[CAN_RX_MB] = 0x1FFFFFFFU;
+    CAN0->RXMGMASK = 0x1FFFFFFFU;
+
+    CAN0->RAMn[CAN_RX_MB * 4U] = 0x04000000U;
+    CAN0->RAMn[CAN_RX_MB * 4U + 1U] = (CAN_RX_ID << 18U);
+
+    /* 启动 CAN0，最多使用 32 个消息缓冲区 */
+    CAN0->MCR = 0x0000001FU;
+
+    while ((CAN0->MCR & CAN_MCR_FRZACK_MASK) != 0U)
+    {
+    }
+}
 /* User includes (#include below this line is not maintained by Processor Expert) */
 
 /*! 
@@ -95,12 +144,23 @@ int main(void)
     PORTD->PCR[16] = PORT_PCR_MUX(1U);
     PTD->PDDR |= (1UL << 16);
     uart1_init();
+    flexcan0_init();
+    uart1_puts("CAN ready, waiting for ID 0x123\r\n");
     /* 不断翻转绿灯状态 */
     for (;;)
     {
-        PTD->PTOR = (1UL << 16);
-        uart1_puts("S32K144 running\r\n");
-        delay(2000000U);
+        if ((CAN0->IFLAG1 & (1UL << CAN_RX_MB)) != 0U)
+        {
+            /* 读一次数据寄存器，完成接收锁定流程 */
+            (void)CAN0->RAMn[CAN_RX_MB * 4U + 2U];
+
+            /* 清除接收完成标志 */
+            CAN0->IFLAG1 = (1UL << CAN_RX_MB);
+
+            /* 收到 ID 0x123：串口打印，绿灯翻转一次 */
+            uart1_puts("CAN RX 0x123\r\n");
+            PTD->PTOR = (1UL << 16);
+        }
     }
   /*** Don't write any code pass this line, or it will be deleted during code generation. ***/
   /*** RTOS startup code. Macro PEX_RTOS_START is defined by the RTOS component. DON'T MODIFY THIS CODE!!! ***/
