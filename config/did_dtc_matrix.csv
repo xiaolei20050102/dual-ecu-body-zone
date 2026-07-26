@@ -1,0 +1,6 @@
+type,id,name,description,status
+DID,0xF190,VehicleIdentificationNumber,Reserved for VIN demo,planned
+DID,0xF187,SoftwareVersion,Reserved for software version readout,planned
+DTC,0x010001,ActuatorStuck,Actuator movement timeout or blocked,planned
+DTC,0x010002,CanCommunicationLost,CAN communication timeout,planned
+

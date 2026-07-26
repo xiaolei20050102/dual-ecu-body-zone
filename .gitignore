@@ -1,0 +1,23 @@
+# S32 Design Studio / Eclipse workspace state
+firmware_s32k/s32ds_workspace/.metadata/
+**/.settings/
+**/.launches/
+
+# S32DS build output
+**/Debug*/
+**/Release*/
+**/*.elf
+**/*.hex
+**/*.bin
+**/*.map
+**/*.siz
+
+# SDK copies are installed locally; do not upload large duplicated tool files
+**/SDK/
+
+# Editor and operating-system files
+*.bak
+*.tmp
+*.log
+.DS_Store
+Thumbs.db
