@@ -7,10 +7,22 @@ firmware_s32k/s32ds_workspace/.metadata/
 **/Debug*/
 **/Release*/
 **/*.elf
+**/*.axf
 **/*.hex
 **/*.bin
 **/*.map
 **/*.siz
+
+# Keil MDK build artifacts and per-user workspace state
+**/*.o
+**/*.crf
+**/*.d
+**/*.dep
+**/*.lst
+**/*.lnp
+**/*.htm
+**/*.uvguix.*
+**/*.uvoptx
 
 # SDK copies are installed locally; do not upload large duplicated tool files
 **/SDK/
