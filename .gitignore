@@ -23,6 +23,8 @@ firmware_s32k/s32ds_workspace/.metadata/
 **/*.htm
 **/*.uvguix.*
 **/*.uvoptx
+**/JLinkLog.txt
+**/JLinkSettings.ini
 
 # SDK copies are installed locally; do not upload large duplicated tool files
 **/SDK/

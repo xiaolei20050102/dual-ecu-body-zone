@@ -26,6 +26,8 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "tim.h"
+#include "motor_driver.h"
+#include "motor_port_stm32.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -45,7 +47,7 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-
+MotorHandle_t g_motor;
 /* USER CODE END Variables */
 /* Definitions for ControlTask */
 osThreadId_t ControlTaskHandle;
@@ -85,12 +87,12 @@ void vApplicationStackOverflowHook(xTaskHandle xTask, signed char *pcTaskName)
     (void)xTask;
     (void)pcTaskName;
 
-    /* ���һ����ȫ������PWM=0��TB6612 ʧ�� */
+    /* 最后一道安全动作：PWM=0，TB6612 失能 */
     __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0U);
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, GPIO_PIN_RESET);
-
+    HAL_GPIO_WritePin(STBY_GPIO_Port, STBY_Pin, GPIO_PIN_RESET);
+    /*屏蔽掉可屏蔽的中断*/
     taskDISABLE_INTERRUPTS();
-    for (;;)
+    for (;;)//此时的for就不是任务了，不会进入时间片，他只是死循环
     {
     }	
 }
@@ -110,11 +112,11 @@ void vApplicationMallocFailedHook(void)
    to query the size of free heap space that remains (although it does not
    provide information on how the remaining heap might be fragmented). */
 	
-    /* ���һ����ȫ������PWM=0��TB6612 ʧ�� */
+    /* 最后一道安全动作：PWM=0，TB6612 失能 */
     __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0U);
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, GPIO_PIN_RESET);
-
-    taskDISABLE_INTERRUPTS();
+    HAL_GPIO_WritePin(STBY_GPIO_Port, STBY_Pin, GPIO_PIN_RESET);
+  /*屏蔽掉可屏蔽的中断*/
+    taskDISABLE_INTERRUPTS();//此时的for就不是任务了，不会进入时间片，他只是死循环
     for (;;)
     {
     }	
@@ -174,10 +176,41 @@ void MX_FREERTOS_Init(void) {
 void StartControlTask(void *argument)
 {
   /* USER CODE BEGIN StartControlTask */
+  (void) argument;
+  MotorStatus_t ret_status = MOTOR_STATUS_OK;
+  ret_status = Motor_Init(&g_motor,&g_motor_port_stm32_ops,(void*)&g_motor_port_stm32_config);
+  
+  if (MOTOR_STATUS_OK != ret_status)
+  {
+      for (;;)
+      {
+          osDelay(1000U);
+      }
+  }
+
+  Motor_SetDirection(&g_motor,MOTOR_DIR_FORWARD);
+
+  Motor_SetDuty(&g_motor,30);
+
+  Motor_Enable(&g_motor);
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+
+      osDelay(10000);
+
+      Motor_Stop(&g_motor);
+      osDelay(1000);
+      Motor_SetDirection(&g_motor,MOTOR_DIR_REVERSE);
+      Motor_SetDuty(&g_motor,30);
+
+      osDelay(10000);
+
+      Motor_Stop(&g_motor);
+      osDelay(1000);
+      Motor_SetDirection(&g_motor,MOTOR_DIR_FORWARD);
+      Motor_SetDuty(&g_motor,30);
+
   }
   /* USER CODE END StartControlTask */
 }

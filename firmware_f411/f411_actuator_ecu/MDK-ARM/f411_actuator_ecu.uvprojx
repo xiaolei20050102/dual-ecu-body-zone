@@ -619,6 +619,36 @@
               <FileType>1</FileType>
               <FilePath>..\BSP\Src\motor_port_stm32.c</FilePath>
             </File>
+            <File>
+              <FileName>encoder_driver.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\BSP\Inc\encoder_driver.h</FilePath>
+            </File>
+            <File>
+              <FileName>encoder_port.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\BSP\Inc\encoder_port.h</FilePath>
+            </File>
+            <File>
+              <FileName>encoder_port_stm32.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\BSP\Inc\encoder_port_stm32.h</FilePath>
+            </File>
+            <File>
+              <FileName>encoder_types.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\BSP\Inc\encoder_types.h</FilePath>
+            </File>
+            <File>
+              <FileName>encoder_port_stm32.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\Src\encoder_port_stm32.c</FilePath>
+            </File>
+            <File>
+              <FileName>encoder_driver.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\Src\encoder_driver.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
