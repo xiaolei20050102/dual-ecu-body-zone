@@ -65,7 +65,14 @@
 
 
 #define CAN_RX_MB       4U
+#define CAN_TX_MB       0U
+
 #define CAN_RX_ID       0x123U
+#define CAN_TX_ID       0x180U
+
+static uint8_t green_led_on = 0U;
+static uint8_t can_rx_count = 0U;
+
 
 static void flexcan0_init(void)
 {
@@ -111,6 +118,42 @@ static void flexcan0_init(void)
     {
     }
 }
+
+static void green_led_set(uint8_t on)
+{
+    if (on != 0U)
+    {
+        /* 板载绿灯低电平点亮 */
+        PTD->PCOR = (1UL << 16);
+        green_led_on = 1U;
+    }
+    else
+    {
+        PTD->PSOR = (1UL << 16);
+        green_led_on = 0U;
+    }
+}
+
+static void flexcan0_send_status(uint8_t result, uint8_t command)
+{
+    /* 状态帧 0x180 的 4 个数据字节：
+       Byte0=result；Byte1=绿灯状态；Byte2=原命令；Byte3=接收计数 */
+    uint32_t data_word =
+        ((uint32_t)result       << 24U) |
+        ((uint32_t)green_led_on << 16U) |
+        ((uint32_t)command      << 8U)  |
+        (uint32_t)can_rx_count;
+
+    CAN0->IFLAG1 = (1UL << CAN_TX_MB);
+
+    CAN0->RAMn[CAN_TX_MB * 4U + 2U] = data_word;
+    CAN0->RAMn[CAN_TX_MB * 4U + 3U] = 0U;
+    CAN0->RAMn[CAN_TX_MB * 4U + 1U] = (CAN_TX_ID << 18U);
+
+    /* 标准 CAN 数据帧，DLC=4，启动发送 */
+    CAN0->RAMn[CAN_TX_MB * 4U] =
+        0x0C400000U | CAN_WMBn_CS_DLC(4U);
+}
 /* User includes (#include below this line is not maintained by Processor Expert) */
 
 /*! 
@@ -143,6 +186,7 @@ int main(void)
     /* PTD16 配置为普通 GPIO 输出，对应板载绿灯 */
     PORTD->PCR[16] = PORT_PCR_MUX(1U);
     PTD->PDDR |= (1UL << 16);
+    green_led_set(0U);
     uart1_init();
     flexcan0_init();
     uart1_puts("CAN ready, waiting for ID 0x123\r\n");
@@ -151,15 +195,47 @@ int main(void)
     {
         if ((CAN0->IFLAG1 & (1UL << CAN_RX_MB)) != 0U)
         {
-            /* 读一次数据寄存器，完成接收锁定流程 */
-            (void)CAN0->RAMn[CAN_RX_MB * 4U + 2U];
+            uint32_t rx_data;
+            uint8_t command;
+            uint8_t result = 0U;
+
+            /* 取接收帧的前 4 个数据字节 */
+            rx_data = CAN0->RAMn[CAN_RX_MB * 4U + 2U];
+            command = (uint8_t)(rx_data >> 24U);
 
             /* 清除接收完成标志 */
             CAN0->IFLAG1 = (1UL << CAN_RX_MB);
 
-            /* 收到 ID 0x123：串口打印，绿灯翻转一次 */
-            uart1_puts("CAN RX 0x123\r\n");
-            PTD->PTOR = (1UL << 16);
+            /* 执行 PC 发来的命令 */
+            switch (command)
+            {
+                case 0x01U:
+                    green_led_set((green_led_on == 0U) ? 1U : 0U);
+                    uart1_puts("CMD: toggle LED\r\n");
+                    break;
+
+                case 0x02U:
+                    green_led_set(1U);
+                    uart1_puts("CMD: LED ON\r\n");
+                    break;
+
+                case 0x03U:
+                    green_led_set(0U);
+                    uart1_puts("CMD: LED OFF\r\n");
+                    break;
+
+                case 0x10U:
+                    uart1_puts("CMD: status request\r\n");
+                    break;
+
+                default:
+                    result = 1U;
+                    uart1_puts("CMD: unknown\r\n");
+                    break;
+            }
+
+            can_rx_count++;
+            flexcan0_send_status(result, command);
         }
     }
   /*** Don't write any code pass this line, or it will be deleted during code generation. ***/

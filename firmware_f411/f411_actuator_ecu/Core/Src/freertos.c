@@ -28,6 +28,14 @@
 #include "tim.h"
 #include "motor_driver.h"
 #include "motor_port_stm32.h"
+
+#include "encoder_driver.h"
+#include "encoder_port_stm32.h"
+
+#include "limit_driver.h"
+#include "limit_port_stm32.h"
+
+#include "usart.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -48,6 +56,13 @@
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
 MotorHandle_t g_motor;
+
+
+static EncoderHandle_t g_encoder;
+static EncoderSnapshot_t g_encoder_snapshot;
+
+static LimitHandle_t g_limit;
+static LimitSnapshot_t g_limit_snapshot;
 /* USER CODE END Variables */
 /* Definitions for ControlTask */
 osThreadId_t ControlTaskHandle;
@@ -177,10 +192,28 @@ void StartControlTask(void *argument)
 {
   /* USER CODE BEGIN StartControlTask */
   (void) argument;
-  MotorStatus_t ret_status = MOTOR_STATUS_OK;
-  ret_status = Motor_Init(&g_motor,&g_motor_port_stm32_ops,(void*)&g_motor_port_stm32_config);
-  
-  if (MOTOR_STATUS_OK != ret_status)
+  //uint16_t encoder_test_count = 0U;
+  MotorStatus_t ret_status_motor = MOTOR_STATUS_OK;
+  EncoderStatus_t ret_status_encoder = ENCODER_STATUS_OK;
+  LimitStatus_t ret_status_limit = LIMIT_STATUS_OK;
+
+  static bool limit_state_logged = false;
+  static LimitSwitchState_t last_limit_state = LIMIT_STATE_NONE;
+
+  ret_status_limit = Limit_Init(&g_limit,&g_limit_port_stm32_ops,(void *)&g_limit_port_stm32_config);
+  if (LIMIT_STATUS_OK != ret_status_limit)
+  {
+      for (;;)
+      {
+          osDelay(1000U);
+      }
+  }  
+  HAL_UART_Transmit(&huart1,
+                  (uint8_t *)"[BOOT] Limit task started\r\n",
+                  sizeof("[BOOT] Limit task started\r\n") - 1U,
+                  100U);
+  ret_status_encoder = Encoder_Init(&g_encoder,&g_encoder_port_stm32_ops,(void*)&g_encoder_port_stm32_config);
+  if (ENCODER_STATUS_OK != ret_status_encoder)  
   {
       for (;;)
       {
@@ -188,29 +221,120 @@ void StartControlTask(void *argument)
       }
   }
 
-  Motor_SetDirection(&g_motor,MOTOR_DIR_FORWARD);
+  ret_status_motor = Motor_Init(&g_motor,&g_motor_port_stm32_ops,(void*)&g_motor_port_stm32_config);
+  
+  if (MOTOR_STATUS_OK != ret_status_motor)
+  {
+      for (;;)
+      {
+          osDelay(1000U);
+      }
+  }
 
-  Motor_SetDuty(&g_motor,30);
+  // Motor_SetDirection(&g_motor,MOTOR_DIR_REVERSE);
 
-  Motor_Enable(&g_motor);
+  // Motor_SetDuty(&g_motor,30);
+
+  // Motor_Enable(&g_motor);
   /* Infinite loop */
   for(;;)
   {
 
-      osDelay(10000);
+      // osDelay(10000);
 
-      Motor_Stop(&g_motor);
-      osDelay(1000);
-      Motor_SetDirection(&g_motor,MOTOR_DIR_REVERSE);
-      Motor_SetDuty(&g_motor,30);
+      // Motor_Stop(&g_motor);
+      // osDelay(1000);
+      // Motor_SetDirection(&g_motor,MOTOR_DIR_REVERSE);
+      // Motor_SetDuty(&g_motor,30);
 
-      osDelay(10000);
+      // osDelay(10000);
 
-      Motor_Stop(&g_motor);
-      osDelay(1000);
-      Motor_SetDirection(&g_motor,MOTOR_DIR_FORWARD);
-      Motor_SetDuty(&g_motor,30);
+      // Motor_Stop(&g_motor);
+      // osDelay(1000);
+      // Motor_SetDirection(&g_motor,MOTOR_DIR_FORWARD);
+      // Motor_SetDuty(&g_motor,30);
 
+    // ret_status_encoder = Encoder_Update(&g_encoder);
+    // if (ENCODER_STATUS_OK != ret_status_encoder)  
+    // {   
+    //     Motor_Stop(&g_motor);
+    //     for (;;)
+    //     {
+    //         osDelay(1000U);
+    //     }
+    // }    
+
+    // ret_status_encoder = Encoder_GetSnapshot(&g_encoder,&g_encoder_snapshot);
+    // if (ENCODER_STATUS_OK != ret_status_encoder)  
+    // {   
+    //     Motor_Stop(&g_motor);
+    //     for (;;)
+    //     {
+    //         osDelay(1000U);
+    //     }
+    // }         
+    // encoder_test_count++;
+
+    // if (encoder_test_count >= 200U)
+    // {
+    //     Motor_Stop(&g_motor);
+
+    //     for (;;)
+    //     {
+    //         osDelay(1000U);
+    //     }
+    // }    
+    ret_status_limit = Limit_Update(&g_limit);
+    if (LIMIT_STATUS_OK != ret_status_limit)
+    {
+        for (;;)
+        {
+            osDelay(1000U);
+        }
+    }
+
+    ret_status_limit = Limit_GetSnapshot(&g_limit, &g_limit_snapshot);
+    if (LIMIT_STATUS_OK != ret_status_limit)
+    {
+        for (;;)
+        {
+            osDelay(1000U);
+        }
+    }    
+
+    if ((!limit_state_logged) || (g_limit_snapshot.state != last_limit_state))
+    {
+        last_limit_state = g_limit_snapshot.state;
+        limit_state_logged = true;
+        switch (g_limit_snapshot.state)
+        {
+            case LIMIT_STATE_NONE:
+                HAL_UART_Transmit(&huart1, (uint8_t *)"[LIMIT] NONE\r\n",
+                                  sizeof("[LIMIT] NONE\r\n") - 1U, 10U);
+                break;
+
+            case LIMIT_STATE_OPEN_ACTIVE:
+                HAL_UART_Transmit(&huart1, (uint8_t *)"[LIMIT] OPEN_ACTIVE\r\n",
+                                  sizeof("[LIMIT] OPEN_ACTIVE\r\n") - 1U, 10U);
+                break;
+
+            case LIMIT_STATE_CLOSE_ACTIVE:
+                HAL_UART_Transmit(&huart1, (uint8_t *)"[LIMIT] CLOSE_ACTIVE\r\n",
+                                  sizeof("[LIMIT] CLOSE_ACTIVE\r\n") - 1U, 10U);
+                break;
+
+            case LIMIT_STATE_CONFLICT:
+                HAL_UART_Transmit(&huart1, (uint8_t *)"[LIMIT] CONFLICT\r\n",
+                                  sizeof("[LIMIT] CONFLICT\r\n") - 1U, 10U);
+                break;
+
+            default:
+                break;
+        }
+        
+    }    
+   
+    osDelay(10U);
   }
   /* USER CODE END StartControlTask */
 }

@@ -649,6 +649,36 @@
               <FileType>1</FileType>
               <FilePath>..\BSP\Src\encoder_driver.c</FilePath>
             </File>
+            <File>
+              <FileName>limit_driver.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\BSP\Inc\limit_driver.h</FilePath>
+            </File>
+            <File>
+              <FileName>limit_port.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\BSP\Inc\limit_port.h</FilePath>
+            </File>
+            <File>
+              <FileName>limit_port_stm32.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\BSP\Inc\limit_port_stm32.h</FilePath>
+            </File>
+            <File>
+              <FileName>limit_types.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\BSP\Inc\limit_types.h</FilePath>
+            </File>
+            <File>
+              <FileName>limit_port_stm32.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\Src\limit_port_stm32.c</FilePath>
+            </File>
+            <File>
+              <FileName>limit_driver.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\Src\limit_driver.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

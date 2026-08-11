@@ -25,6 +25,13 @@ firmware_s32k/s32ds_workspace/.metadata/
 **/*.uvoptx
 **/JLinkLog.txt
 **/JLinkSettings.ini
+**/*.iex
+
+# Obsolete exploratory F411 project; the maintained project is f411_actuator_ecu.
+firmware_f411/f411_actuator_bringup/
+
+# Keil Event Recorder viewer metadata generated locally.
+firmware_f411/f411_actuator_ecu/MDK-ARM/EventRecorderStub.scvd
 
 # SDK copies are installed locally; do not upload large duplicated tool files
 **/SDK/
