@@ -17,7 +17,7 @@
 ## 2. 分层和数据流
 
 ```text
-PB12/PB13 -> limit_port -> limit_driver -> 限位稳定快照 --+
+PB12/PB13 -> limit_port -> limit_driver -> 限位稳定快照（state + stable_valid） --+
 TIM2      -> encoder_port -> encoder_driver -> 编码器快照 --+-> ControlTask
 临时命令（以后替换为 LIN 已校验命令） -----------------------+        |
 当前时间 / 超时监视 ------------------------------------------+        v
@@ -31,9 +31,11 @@ TIM2      -> encoder_port -> encoder_driver -> 编码器快照 --+-> ControlTask
 规则：
 
 1. 状态机不直接读 GPIO、不直接读 TIM2、不解析 LIN 帧、不写 PWM/GPIO 寄存器。
-2. `ControlTask` 每 10 ms 读取各驱动快照，组成本周期输入，再调用状态机。
+2. `ControlTask` 每 10 ms 读取各驱动快照，组成本周期输入，再调用状态机；当前阶段由它独占 `Motor_*` 调用权。
 3. 状态机只通过 `Motor_*` 动作；禁止越过 `motor_driver` 操作 TIM1、AIN1/AIN2 或 STBY。
-4. LIN 接入后只替换“命令输入来源”；状态机规则不变。
+4. LIN 接入后只替换“命令输入来源”；状态机不解析 PID、长度、CRC 或 Alive。
+5. `SafetyTask` 不得并发调用 `Motor_*` 或直接修改 PWM、方向和 STBY；它后续只负责健康监视、看门狗或复位策略。
+6. 状态机只发布状态和故障快照；USART1 日志由任务层仅在快照变化时输出。进入 5 ms 周期后，日志不得在控制路径中长期阻塞。
 
 ## 3. 名词边界
 
@@ -51,6 +53,7 @@ TIM2      -> encoder_port -> encoder_driver -> 编码器快照 --+-> ControlTask
 
 | 状态 | 含义 | 电机状态 |
 |---|---|---|
+| `INIT` | 上电等待限位输入完成首次去抖；拒绝全部运动命令 | PWM=0，STBY=0 |
 | `IDLE` | 健康、停止失能、位置未知（通常在中间或上电未触发限位） | PWM=0，STBY=0 |
 | `MOVING_OPEN` | 健康、向开端运动 | 已使能 |
 | `MOVING_CLOSE` | 健康、向关端运动 | 已使能 |
@@ -58,7 +61,7 @@ TIM2      -> encoder_port -> encoder_driver -> 编码器快照 --+-> ControlTask
 | `AT_CLOSE` | 健康、停止失能、确认在关端 | PWM=0，STBY=0 |
 | `FAULT` | 故障锁存；拒绝运动命令 | PWM=0，STBY=0 |
 
-`IDLE` 不等于“必然在中间”；它只代表健康但没有已确认的端点位置。`AT_OPEN` 与 `AT_CLOSE` 不能合并进 `IDLE`，因为它们保留了端点安全信息。
+`INIT` 不是健康可运动状态：`limit_read_valid=true` 但 `limit_stable=false` 时必须保持 `INIT` 与 `SAFE_STOP`。`IDLE` 不等于“必然在中间”；它只代表健康但没有已确认的端点位置。`AT_OPEN` 与 `AT_CLOSE` 不能合并进 `IDLE`，因为它们保留了端点安全信息。
 
 ### 4.2 命令
 
@@ -89,17 +92,35 @@ MOTOR_DRIVER_ERROR
 
 ## 5. 统一电机动作
 
+### 5.1 SAFE_STOP：停止失败时仍必须继续兜底
+
 ```text
 SAFE_STOP
-  = Motor_Stop() -> Motor_Disable()
-  = 最终必须满足 PWM=0、STBY=0
+  1. 调用 Motor_Stop()，保存 stop_result
+  2. 无论 stop_result 成功或失败，都调用 Motor_Disable()，保存 disable_result
+  3. 若两步均成功：返回 SAFE_STOP_OK
+  4. 若任一步失败：调用 Motor_ForceSafeState()，返回 SAFE_STOP_FAILED
+```
 
+`Motor_ForceSafeState()` 是最后一道硬件动作兜底：直接请求 `PWM=0`、`AIN1=0`、`AIN2=0`、`STBY=0`。当前底层接口不提供硬件反馈，因此状态机只能确认“强制安全输出已被请求”，不能把它表述为硬件状态已被反馈确认。
+
+任何原本计划进入 `IDLE`、`AT_OPEN` 或 `AT_CLOSE` 的迁移，只有在 `SAFE_STOP_OK` 时才可进入该健康状态；若得到 `SAFE_STOP_FAILED`，必须改为进入 `FAULT` 并锁存 `MOTOR_DRIVER_ERROR`。故障入口只执行一次该兜底序列，后续 `FAULT` 周期保持停止失能且不重复刷屏。
+
+### 5.2 SAFE_START：任一步失败都回到安全故障出口
+
+```text
 SAFE_START(方向)
   = 确认已安全停止
   -> Motor_SetDirection(方向)
   -> Motor_SetDuty(配置的占空比)
   -> Motor_Enable()
+
+若上述任一步失败：
+  -> SAFE_STOP
+  -> FAULT + MOTOR_DRIVER_ERROR
 ```
+
+因此状态机不允许在任何 `Motor_*` 调用失败后继续保持 `MOVING_OPEN`、`MOVING_CLOSE` 或切换到正常停止状态。
 
 `MOTOR_DIR_FORWARD` 与“开方向/关方向”的实际对应关系只在一处配置。当前可先采用占位映射；硬件验收时以实际机构方向为准调整。应用层不直接改方向引脚或 PWM。
 
@@ -108,7 +129,7 @@ SAFE_START(方向)
 每次 `Update()` 先后按以下优先级判断：
 
 ```text
-1. 输入可信度：限位读取、编码器更新、电机动作结果
+1. 输入可信度：限位读取、限位首次稳定性、编码器更新、电机动作结果
 2. 立即危险：双限位冲突
 3. 运动异常：通信超时、行程超时、编码器堵转、反向端限位未释放
 4. 正常到位：当前运动方向的目标限位有效
@@ -118,16 +139,18 @@ SAFE_START(方向)
 
 因此在同一周期同时出现开到位和 `OPEN` 命令时，必须先处理“开到位”，立即停止，不能因命令多运行一个 10 ms 周期。
 
-## 7. 上电初始状态
+## 7. 上电初始化与初始状态
 
-初始限位状态经去抖确认后：
+`Actuator_Init()` 只进入 `INIT` 并执行 `SAFE_STOP`，不得根据第一次 GPIO 读取直接判定端点。`ControlTask` 持续调用限位驱动；当 `limit_read_valid=true` 且 `limit_stable=true` 后，状态机按下表离开 `INIT`：
 
-| 初始限位状态 | 初始状态 | 动作 |
+| 首次可信限位状态 | 离开 `INIT` 后的状态 | 动作 |
 |---|---|---|
 | `CONFLICT` | `FAULT` | `SAFE_STOP`，锁存 `LIMIT_CONFLICT` |
 | `OPEN_ACTIVE` | `AT_OPEN` | `SAFE_STOP` |
 | `CLOSE_ACTIVE` | `AT_CLOSE` | `SAFE_STOP` |
 | `NONE` | `IDLE` | `SAFE_STOP` |
+
+在 `INIT` 中，`limit_read_valid=false` 立即进入 `FAULT + LIMIT_INPUT_INVALID`；`limit_stable=false` 保持 `INIT`，并忽略 `OPEN`、`CLOSE`、`STOP` 与 `CLEAR_FAULT`。
 
 ## 8. 正常状态迁移表
 
@@ -174,36 +197,69 @@ SAFE_START(方向)
 
 ## 10. 故障复位
 
+### 10.1 通用规则
+
 | 当前状态 | 事件 | 条件 | 新状态 | 动作 |
 |---|---|---|---|---|
 | `FAULT` | `OPEN` / `CLOSE` / `STOP` | 任意 | `FAULT` | 保持 `SAFE_STOP`，拒绝运动 |
-| `FAULT` | `CLEAR_FAULT` | 对应故障条件仍存在 | `FAULT` | 拒绝复位 |
-| `FAULT` | `CLEAR_FAULT` | 对应故障条件已消失 | `IDLE` | 清故障码，仍保持 `SAFE_STOP` |
+| `FAULT` | `CLEAR_FAULT` | 对应故障的复位条件未满足 | `FAULT` | 拒绝复位，保持已锁存故障码 |
+| `FAULT` | `CLEAR_FAULT` | 对应故障的复位条件满足 | `IDLE` | 清故障码，仍保持 `SAFE_STOP` |
 
 故障复位不等于启动。进入 `IDLE` 后必须再收到新的 `OPEN` 或 `CLOSE` 才允许运动。
 
+### 10.2 故障码级复位条件
+
+`CLEAR_FAULT` 不采用笼统的“故障消失”判断。每个故障码必须按下表判断，且任一恢复路径均不得自动使能电机。
+
+| 已锁存故障码 | `CLEAR_FAULT` 的允许条件 | 复位含义 |
+|---|---|---|
+| `LIMIT_CONFLICT` | 本周期限位读取成功、首次去抖已完成，且稳定状态不是 `CONFLICT` | 已确认双限位不再同时有效。 |
+| `LIMIT_INPUT_INVALID` | 本周期限位读取成功，且首次去抖已完成 | 限位输入链路已重新提供可信稳定快照。 |
+| `LIMIT_OPEN_STUCK` | 本周期限位读取成功、首次去抖已完成，且开限位当前未有效 | 原开端限位已释放。 |
+| `LIMIT_CLOSE_STUCK` | 本周期限位读取成功、首次去抖已完成，且关限位当前未有效 | 原关端限位已释放。 |
+| `LIMIT_OPEN_POSITION_LOST` | 本周期限位读取成功、首次去抖已完成，且稳定状态不是 `CONFLICT` | 不再声称已确认开端；复位后以 `IDLE` 的位置未知语义重新开始。 |
+| `LIMIT_CLOSE_POSITION_LOST` | 本周期限位读取成功、首次去抖已完成，且稳定状态不是 `CONFLICT` | 不再声称已确认关端；复位后以 `IDLE` 的位置未知语义重新开始。 |
+| `ENCODER_UPDATE_ERROR` | 本周期 `Encoder_Update()` 与快照读取均成功 | 编码器链路本周期已恢复可用。 |
+| `ENCODER_STALL` | 限位输入可信且编码器本周期更新成功 | 停车后无法证明堵转根因已消失；本次仅解除锁存，下一次运动必须重新执行堵转监视。 |
+| `TRAVEL_TIMEOUT_OPEN` / `TRAVEL_TIMEOUT_CLOSE` | 限位输入可信且编码器本周期更新成功 | 停车后无法证明机构行程已恢复；本次仅解除锁存，下一次运动必须重新执行行程超时监视。 |
+| `COMMAND_TIMEOUT` | 后续 LIN/通信模块已确认通信恢复；不得由单帧直接宣布恢复 | 通信模块应在连续有效帧满足其恢复策略后，向状态机提供通信健康输入。 |
+| `MOTOR_DRIVER_ERROR` | 不允许运行中通过 `CLEAR_FAULT` 清除 | 必须保持安全停止，并重新完成 `Motor_Init()` 与 `Actuator_Init()` 后才建立新的安全基线。 |
+
+其中 `ENCODER_STALL`、行程超时属于“仅在运动中可判断”的动态故障：故障锁存后电机已经停止，因而无法在 `FAULT` 内证明机械根因已经消失。允许人工复位的含义只是重新获得一次安全的受监视尝试机会，不是宣称故障已经被修复。
+
 ## 11. 通信新鲜度与未来 LIN
 
-动作启动是一次命令触发；运动期间需要周期有效通信作为“继续运动授权”。
+### 11.1 职责边界
+
+动作启动是一次命令触发；运动期间需要周期有效通信作为“继续运动授权”。协议有效性与状态机安全策略必须分层：
 
 ```text
-有效 LIN BodyCmd
-  = PID/长度/命令范围/CRC/Alive 均正确
-  -> LIN 接收模块刷新 last_valid_command_time
-  -> 输出 OPEN / CLOSE / STOP / CLEAR_FAULT 给状态机
-
-若状态为 MOVING_OPEN 或 MOVING_CLOSE：
-  now - last_valid_command_time > T_COMMAND_TIMEOUT
-  -> COMMAND_TIMEOUT -> FAULT -> SAFE_STOP
+LIN 接收/通信模块
+  校验 PID、长度、命令范围、CRC、Alive
+  刷新 last_valid_command_time
+  按 T_COMMAND_TIMEOUT 判断 communication_alive
+  按连续有效帧策略判断 communication_recovered
+  输出已校验命令和通信健康输入
+                     |
+                     v
+ActuatorStateMachine
+  不解析 LIN 帧
+  仅在 MOVING_OPEN / MOVING_CLOSE 中：
+  communication_alive=false
+    -> COMMAND_TIMEOUT -> FAULT -> SAFE_STOP
 ```
+
+`T_COMMAND_TIMEOUT` 属于 LIN/通信配置，不属于执行器机构标定参数。项目最终目标是 F411 在 LIN 命令超时 100 ms 内安全停止；当前未接 LIN，不启用该故障判定。通信恢复不得由单帧宣布成功，连续有效帧数量由后续 LIN 信号矩阵定义。
 
 所有有效 LIN 帧都可刷新通信新鲜度；表中“同方向命令保持运动”不是唯一的刷新入口。`IDLE`、端点状态和 `FAULT` 已安全停止，不因没有通信而进入故障。
 
-当前未接入 LIN：临时命令由 `ControlTask` 提供；`COMMAND_TIMEOUT` 事件先保留在接口和状态表中，不在单板首次限位停车验证中启用。
+### 11.2 当前单板阶段的临时来源
 
-## 12. 待标定参数
+当前临时命令由 `ControlTask` 提供。为保持状态机接口不因 LIN 接入而重写，单板阶段固定向状态机提供 `communication_alive=true`；只有 LIN 通信模块接入并经过独立验证后，才允许该输入改由通信监视器产生。
 
-以下是配置项，不得凭空写固定数值；要在实际机构上测量后记录来源和最终值。
+## 12. 待标定参数与周期迁移约束
+
+以下是执行器机构配置项，不得凭空写固定数值；要在实际机构上测量后记录来源和最终值。
 
 ```text
 T_LIMIT_DEBOUNCE          限位去抖时间（当前驱动为 3 个 10 ms 一致采样）
@@ -213,8 +269,9 @@ T_ENCODER_STALL           宽限结束后允许无计数变化的最大时间
 ENCODER_MIN_DELTA         判定“仍在运动”的最小计数变化
 T_TRAVEL_OPEN             最大开行程时间
 T_TRAVEL_CLOSE            最大关行程时间
-T_COMMAND_TIMEOUT         LIN 有效命令新鲜度超时
 ```
+
+`T_COMMAND_TIMEOUT` 已移至通信配置，不能继续放在 `ActuatorConfig_t`。当前限位驱动使用“连续 3 次采样”去抖；在 10 ms 周期下约为 30 ms。后续控制周期迁移到 5 ms 时，不得静默沿用 3 次采样而将去抖时间改成约 15 ms；必须显式保持目标去抖时间，或记录新的标定和回归证据。
 
 ## 13. 状态机模块的概念接口
 
@@ -222,7 +279,7 @@ T_COMMAND_TIMEOUT         LIN 有效命令新鲜度超时
 
 ```text
 Init
-  上电执行一次；根据初始限位进入安全初始状态。
+  上电执行一次；绑定电机对象和只读机构配置，验证配置合法性后进入 INIT 与 SAFE_STOP。
 
 Update(Input)
   ControlTask 每 10 ms 调用；输入为限位、编码器、命令、时间和通信健康信息。
@@ -235,10 +292,10 @@ GetSnapshot
 概念输入包：
 
 ```text
-limit_valid / limit_state
+limit_read_valid / limit_stable / limit_state
 encoder_valid / encoder_position
 command
-command_fresh（当前单板阶段可保留占位）
+communication_alive（当前单板阶段固定为 true）
 now_ms
 ```
 
@@ -252,6 +309,12 @@ last_encoder_position
 last_encoder_change_time
 ```
 
+`ActuatorHandle_t` 还必须保存 `MotorHandle_t *motor`、`const ActuatorConfig_t *config` 和 `initialized`。配置校验至少包括：开、关方向必须不同；运行占空比为 1~100；所有当前已启用的机构超时和阈值非零。`ActuatorConfig_t` 不再包含 `command_timeout_ms`。
+
+公开接口除 `Init / Update / GetSnapshot` 外，还应定义模块级返回状态 `ActuatorStatus_t`，至少能表达空指针、未初始化、无效配置和底层电机动作失败。公开头文件与实现文件固定放在 `App/Inc`、`App/Src`；Keil 工程必须增加 `../App/Inc` 包含路径并显式加入状态机 `.c` 文件。
+
+未来若加入“目标位置/百分比”命令，不允许 LIN 直接驱动电机；通信层仍应将它转换为统一的应用命令请求，状态机再根据编码器和限位决定方向、停止与故障。该能力属于后续位置控制扩展，不在本阶段提前实现。
+
 输出快照：
 
 ```text
@@ -263,10 +326,10 @@ latched_fault
 
 每步完成后先编译并发代码/截图给 Codex 审查；不要一次写完整状态机。
 
-1. 新建 `BSP/Inc/actuator_state_machine_types.h`：只写 include guard、状态枚举、命令枚举、故障枚举。
-2. 新建 `BSP/Inc/actuator_state_machine.h`：只定义状态机对象包含的运行上下文，并声明 `Init`、`Update`、`GetSnapshot`。
-3. 新建 `BSP/Src/actuator_state_machine.c`：先实现 `Init`，验证上电只安全停机并正确判定四种限位初态。
-4. 实现 `Update` 的第一条正常闭环：`IDLE + OPEN -> MOVING_OPEN`，`MOVING_OPEN + 开限位 -> AT_OPEN`。
+1. 使用已有 `App/Inc/actuator_sm_types.h`：冻结状态、命令、故障、输入/输出快照和机构配置；补齐 `INIT`、限位可信度与通信健康字段。
+2. 新建 `App/Inc/actuator_state_machine.h`：定义状态机对象运行上下文、`ActuatorStatus_t`，并声明 `Init`、`Update`、`GetSnapshot`。
+3. 新建 `App/Src/actuator_state_machine.c`：先实现 `Init` 与 `INIT` 分支，验证上电只安全停机；限位首次去抖完成后才正确判定四种初态。
+4. 将 `App/Inc` 加入 Keil Include Path，并将 `App/Src/actuator_state_machine.c` 加入 Keil 工程；然后实现 `Update` 的第一条正常闭环：`IDLE + OPEN -> MOVING_OPEN`，`MOVING_OPEN + 开限位 -> AT_OPEN`。
 5. 以相同方式实现关方向闭环。
 6. 加入双限位冲突的故障锁存；验证 `PWM=0`、`STBY=0` 与一次故障日志。
 7. 再逐项加入 STOP、禁止直接反转、`CLEAR_FAULT`、编码器更新失败、各类超时与堵转判断。
@@ -277,6 +340,7 @@ latched_fault
 必须保存构建结果、USART1 日志和硬件行为证据：
 
 ```text
+上电：限位尚未首次稳定 -> INIT -> PWM=0、STBY=0
 正常：正转触发开到位 -> AT_OPEN -> PWM=0、STBY=0
 正常：反转触发关到位 -> AT_CLOSE -> PWM=0、STBY=0
 异常：双限位冲突 -> FAULT_LIMIT_CONFLICT -> PWM=0、STBY=0

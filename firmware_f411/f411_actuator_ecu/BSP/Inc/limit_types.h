@@ -33,8 +33,8 @@ typedef enum
  */
 typedef struct
 {
-    bool open_active;//关到位限位开关是否被压下
-    bool close_active;//开到位限位开关是否被压下
+    bool open_active;//开到位限位开关是否被压下
+    bool close_active;//关到位限位开关是否被压下
 } LimitRawState_t;
 
 /**
@@ -43,6 +43,7 @@ typedef struct
 typedef struct
 {
     LimitSwitchState_t state;
+    bool stable_valid;//false 表示“尚未得到第一份完成去抖的限位状态”；此时 state 不能给状态机作为上电判定依据
 } LimitSnapshot_t;
 
 #endif /* LIMIT_TYPES_H */

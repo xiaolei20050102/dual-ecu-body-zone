@@ -22,6 +22,7 @@ typedef struct {
     LimitRawState_t candidate_raw_state;/*未处理数据候选等待处理消抖*/
     uint8_t candidate_sample_count;/*候选值确认次数计数*/
     LimitSwitchState_t stable_state;/*稳定之后的状态，可用上报给控制层*/
+    bool stable_valid;//false 表示“尚未得到第一份完成去抖的限位状态”；此时 state 不能给状态机作为上电判定依据。
 }LimitHandle_t;
 
 

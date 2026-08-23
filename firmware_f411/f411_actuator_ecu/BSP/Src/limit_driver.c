@@ -94,9 +94,12 @@ LimitStatus_t Limit_Init(LimitHandle_t *limit,const LimitPortOps_t *port_ops,voi
 
     limit->port_ops = port_ops;
     limit->limit_context = limit_context;
+
+
     limit->candidate_raw_state = raw_state;
-    limit->candidate_sample_count = LIMIT_DEBOUNCE_SAMPLE_COUNT;
-    limit->stable_state = Limit_ConvertRawState(&raw_state);
+    limit->candidate_sample_count = 1U;//第一次只能算采样一次
+    limit->stable_state = LIMIT_STATE_NONE;
+    limit->stable_valid = false;//当前第一次未达到稳定有效值
     limit->initialized = true;
 
     return LIMIT_STATUS_OK;
@@ -145,6 +148,7 @@ LimitStatus_t Limit_Update(LimitHandle_t *limit)
     {
         /*达到计数，将当前的候选原始值转化为稳定状态*/
         limit->stable_state = Limit_ConvertRawState(&limit->candidate_raw_state);
+        limit->stable_valid = true;
     }
 
     return LIMIT_STATUS_OK;
@@ -163,6 +167,7 @@ LimitStatus_t Limit_GetSnapshot(const LimitHandle_t *limit,LimitSnapshot_t *snap
     }
 
     snapshot->state = limit->stable_state;
+    snapshot->stable_valid = limit->stable_valid;
 
     return LIMIT_STATUS_OK;
 }
