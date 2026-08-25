@@ -110,17 +110,18 @@ typedef struct
 /**
  * @brief 执行器机构相关的只读标定配置。
  * @note 方向、占空比和超时阈值由机构测量后填写；状态机运行期间不得修改。
+ *       Actuator_Init() 会拒绝非法方向、0% 占空比及为 0 的安全时间/阈值。
  */
 typedef struct
 {
-    MotorDirection_t open_direction;      // 机构向开端运动对应的底层电机方向。
-    MotorDirection_t close_direction;     // 机构向关端运动对应的底层电机方向。
-    uint8_t  run_duty_percent;            // 正常运动 PWM 占空比，范围为 0~100（%）。
-    uint32_t limit_release_timeout_ms;    // 离开反向端后原限位必须释放的最大时间，单位 ms。
-    uint32_t encoder_startup_grace_ms;    // 启动后暂不检查编码器变化的宽限时间，单位 ms。
-    uint32_t encoder_stall_timeout_ms;    // 宽限结束后允许编码器无有效变化的最大时间，单位 ms。
-    uint32_t encoder_min_delta;           // 判定编码器仍在运动的最小绝对计数变化量，单位为计数。
-    uint32_t travel_open_timeout_ms;      // 向开端运动的最大允许行程时间，单位 ms。
-    uint32_t travel_close_timeout_ms;     // 向关端运动的最大允许行程时间，单位 ms。
+    MotorDirection_t open_direction;      // 收到开运动请求时传给 Motor_SetDirection() 的方向；必须为有效方向，且不得等于 close_direction。
+    MotorDirection_t close_direction;     // 收到关运动请求时传给 Motor_SetDirection() 的方向；必须为有效方向，且不得等于 open_direction。
+    uint8_t  run_duty_percent;            // 运动期间传给 Motor_SetDuty() 的 PWM 占空比，范围 1~100（%）；0% 不会产生驱动力。
+    uint32_t limit_release_timeout_ms;    // 从已触发端点向反方向启动后，原限位必须在此时间内释放；超时表示限位/线路/机构可能卡住，单位 ms。
+    uint32_t encoder_startup_grace_ms;    // 电机刚开始转时先等多久；在这段时间内，即使编码器计数不变也不报堵转，单位 ms。
+    uint32_t encoder_stall_timeout_ms;    // 等待时间结束后，若连续这么久编码器都没有明显变化，就报堵转，单位 ms。
+    uint32_t encoder_min_delta;           // 编码器至少变化多少计数才算“明显变化”；例如设为 3，变化 0、1、2 都仍算没有明显运动，单位为计数。
+    uint32_t travel_open_timeout_ms;      // 从开始向开端运动到必须触发开限位的最长时间；超时即判开方向行程异常，单位 ms。
+    uint32_t travel_close_timeout_ms;     // 从开始向关端运动到必须触发关限位的最长时间；超时即判关方向行程异常，单位 ms。
 }ActuatorConfig_t;
 #endif /*ACTUATOR_SM_TYPES_H*/

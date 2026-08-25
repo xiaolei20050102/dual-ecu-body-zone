@@ -14,16 +14,16 @@
  */
 typedef struct
 {
-    MotorHandle_t *motor;
-    const ActuatorConfig_t *config;
-    bool initialized;
+    MotorHandle_t *motor;                 // 绑定的底层电机驱动；状态机只能通过该对象调用 Motor_* 控制电机。
+    const ActuatorConfig_t *config;       // 绑定的只读机构标定；运行期间只读取，不允许状态机修改。
+    bool initialized;                     // 仅当初始化已完成安全停机和失能后才为 true；false 时 Update() 必须拒绝处理。
 
-    ActuatorState_t current_state;
-    ActuatorFault_t latched_fault;
+    ActuatorState_t current_state;        // 当前执行器状态，例如 INIT、IDLE、MOVING_OPEN 或 FAULT。
+    ActuatorFault_t latched_fault;        // 首次进入 FAULT 时记录的故障原因；故障未被允许清除前保持不变。
 
-    uint32_t motion_start_time_ms;
-    EncoderPosition_t last_encoder_position;
-    uint32_t last_encoder_change_time_ms;
+    uint32_t motion_start_time_ms;        // 本次开始向开端或关端运动的时间，用于限位释放和最大行程超时判断。
+    EncoderPosition_t last_encoder_position; // 上一次确认电机确实在动时的编码器位置，用于判断本周期是否有足够位移。
+    uint32_t last_encoder_change_time_ms; // 上一次确认电机确实在动的时间；超过堵转超时仍无足够位移时进入 FAULT。
 } ActuatorHandle_t;
 
 /**

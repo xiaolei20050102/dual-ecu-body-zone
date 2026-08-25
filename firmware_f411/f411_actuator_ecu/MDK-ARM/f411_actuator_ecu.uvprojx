@@ -340,7 +340,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER,STM32F411xE</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;..\BSP\Inc</IncludePath>
+              <IncludePath>../Core/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;..\BSP\Inc;..\App\Inc</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -678,6 +678,26 @@
               <FileName>limit_driver.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\BSP\Src\limit_driver.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>App</GroupName>
+          <Files>
+            <File>
+              <FileName>actuator_sm_types.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\App\Inc\actuator_sm_types.h</FilePath>
+            </File>
+            <File>
+              <FileName>actuator_state_machine.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\App\Inc\actuator_state_machine.h</FilePath>
+            </File>
+            <File>
+              <FileName>actuator_state_machine.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\App\Src\actuator_state_machine.c</FilePath>
             </File>
           </Files>
         </Group>
