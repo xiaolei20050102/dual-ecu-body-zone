@@ -189,7 +189,7 @@ ActuatorStatus_t Actuator_Update(ActuatorHandle_t *p_actuator_handle,const Actua
     if ((false == p_input->limit_read_valid) &&
         (ACTUATOR_STATE_FAULT != p_actuator_handle->current_state))
     {
-        // 限位快照不可用时，任何健康状态均不得继续执行动作。
+        // 这周期没能读到限位状态，不知道机构是否已到端点，所以先停车并报错
         return Actuator_EnterFault(p_actuator_handle,ACTUATOR_FAULT_LIMIT_INPUT_INVALID);
     }
 
@@ -197,46 +197,46 @@ ActuatorStatus_t Actuator_Update(ActuatorHandle_t *p_actuator_handle,const Actua
         (true == p_input->limit_stable) &&
         (LIMIT_STATE_CONFLICT == p_input->limit_state))
     {
-        // 两个稳定限位同时有效是全局硬件矛盾，优先于所有状态和命令处理。
+        // 开和关限位同时有效，说明接线或机构异常，先停车并报错
         return Actuator_EnterFault(p_actuator_handle,ACTUATOR_FAULT_LIMIT_CONFLICT);
     }
 
-    // 全局安全条件通过后，再按当前状态处理本周期输入。
+    // 前面先处理所有状态都必须响应的故障，通过后才根据当前状态做事
     switch (p_actuator_handle->current_state)
     {
         case ACTUATOR_STATE_INIT:
         {
-            // 上电阶段只确认初始物理位置；所有动作命令在 INIT 中均被忽略。
+            // 刚上电时不允许电机动作，只通过限位器判断机构目前在哪里
             if (false == p_input->limit_stable)
             {
-                // 首份去抖完成的限位快照尚未得到，继续保持电机停止、失能。
+                // 限位器还在去抖，当前结果不可信，继续等待
                 return ACTUATOR_STATUS_OK;
             }
 
-            // 用第一份可信限位状态建立初始状态，后续才能响应动作命令。
+            // 限位状态稳定后，再决定初始时是中间、开端还是关端
             switch (p_input->limit_state)
             {
                 case LIMIT_STATE_NONE:
                 {
-                    // 两端均未触发：机构不在已知端点，安全地进入中间停机状态。
+                    // 两个限位都没按下，说明不在两端，电机保持停止并进入 IDLE
                     p_actuator_handle->current_state = ACTUATOR_STATE_IDLE;
                     break;
                 }
                 case LIMIT_STATE_OPEN_ACTIVE:
                 {
-                    // 开端已触发：记录端点状态，电机保持停止、失能。
+                    // 开限位已按下，说明机构在开端，电机保持停止
                     p_actuator_handle->current_state = ACTUATOR_STATE_AT_OPEN;
                     break;
                 }
                 case LIMIT_STATE_CLOSE_ACTIVE:
                 {
-                    // 关端已触发：记录端点状态，电机保持停止、失能。
+                    // 关限位已按下，说明机构在关端，电机保持停止
                     p_actuator_handle->current_state = ACTUATOR_STATE_AT_CLOSE;
                     break;
                 }
                 default:
                 {
-                    // stable 标志与枚举值不一致时，快照已不可信，按限位输入异常处理。
+                    // 限位状态不是预期的几种值，不能相信这份输入，按限位异常处理
                     return Actuator_EnterFault(p_actuator_handle,ACTUATOR_FAULT_LIMIT_INPUT_INVALID);
                 }
             }
@@ -244,28 +244,28 @@ ActuatorStatus_t Actuator_Update(ActuatorHandle_t *p_actuator_handle,const Actua
         }
         case ACTUATOR_STATE_IDLE:
         {
-            // IDLE 的不变量：健康、停止、失能；只允许从此处发起新的单方向运动。
+            // IDLE 表示机构健康且电机已停止失能，只能从这里开始新的动作
             switch (p_input->command)
             {
                 case ACTUATOR_CMD_NONE:
                 {
-                    // 本周期没有新命令，维持 IDLE 的安全停机状态。
+                    // 本周期没有命令，电机继续保持停止
                     break;
                 }
 
                 case ACTUATOR_CMD_CLEAR_FAULT:
                 {
-                    // 当前没有故障需要清除；CLEAR_FAULT 仅在 FAULT 状态下有意义。
+                    // 当前没有故障，清故障命令没有作用，继续保持停止
                     break;
                 }
 
                 case ACTUATOR_CMD_STOP:
                 {
-                    // 重复 STOP 仍重新请求安全停机，确保外部停止命令可随时加强安全输出。
+                    // 即使当前已经停了，也再次请求停止和失能，保证 STOP 命令一定生效
                     actuator_status = Actuator_ExecuteSafeStop(p_actuator_handle->motor);
                     if (ACTUATOR_STATUS_OK != actuator_status)
                     {
-                        // 安全停车已尝试 ForceSafeState；此处只锁存，不再重复停车。
+                        // Stop 或 Disable 失败时已经尝试强制关闭硬件，这里只记录故障
                         Actuator_LatchFault(p_actuator_handle,
                                             ACTUATOR_FAULT_MOTOR_DRIVER_ERROR);
                         return ACTUATOR_STATUS_ERR_MOTOR;
@@ -277,25 +277,25 @@ ActuatorStatus_t Actuator_Update(ActuatorHandle_t *p_actuator_handle,const Actua
                 {
                     if (false == p_input->encoder_valid)
                     {
-                        // 未确认编码器可用时禁止启动，否则后续无法检测堵转。
+                        // 编码器这周期不可用，启动后就无法判断电机有没有转，所以不启动
                         return Actuator_EnterFault(p_actuator_handle,
                                                    ACTUATOR_FAULT_ENCODER_UPDATE_ERROR);
                     }
 
-                    // 只通过统一安全启动函数设置方向、PWM 与使能，应用层不直接操作硬件。
+                    // 由安全启动函数依次设置开方向、PWM 和使能，状态机不直接操作硬件
                     actuator_status = Actuator_ExecuteSafeStart(p_actuator_handle,
                                                                 p_actuator_handle->config->open_direction);
                     if (ACTUATOR_STATUS_OK != actuator_status)
                     {
-                        // 安全启动函数已完成故障停车和锁存，不能提交 MOVING_OPEN。
+                        // 启动失败时安全启动函数已经停车并记录故障，不能改成 MOVING_OPEN
                         return actuator_status;
                     }
 
-                    // 以本周期快照作为行程超时与编码器堵转监测的共同起点。
+                    // 记下刚启动时的位置和时间，后续用来判断有没有转动和是否超时
                     p_actuator_handle->last_encoder_position = p_input->encoder_position;
                     p_actuator_handle->last_encoder_change_time_ms = p_input->now_ms;
                     p_actuator_handle->motion_start_time_ms = p_input->now_ms;
-                    // 所有启动与监测基准准备完成后，最后提交“向开端运动”状态。
+                    // 电机已启动且监测起点已记好，现在才标记为正在向开端运动
                     p_actuator_handle->current_state = ACTUATOR_STATE_MOVING_OPEN;
                     break;
                 }
@@ -304,46 +304,284 @@ ActuatorStatus_t Actuator_Update(ActuatorHandle_t *p_actuator_handle,const Actua
                 {
                     if (false == p_input->encoder_valid)
                     {
-                        // 未确认编码器可用时禁止启动，否则后续无法检测堵转。
+                        // 编码器这周期不可用，启动后就无法判断电机有没有转，所以不启动
                         return Actuator_EnterFault(p_actuator_handle,
                                                    ACTUATOR_FAULT_ENCODER_UPDATE_ERROR);
                     }
 
-                    // 与 OPEN 镜像：使用关方向进行统一安全启动。
+                    // 与开方向相同的启动步骤，只是这里使用关方向
                     actuator_status = Actuator_ExecuteSafeStart(p_actuator_handle,
                                                                 p_actuator_handle->config->close_direction);
                     if (ACTUATOR_STATUS_OK != actuator_status)
                     {
-                        // 安全启动失败时保持其已建立的 FAULT，不能提交 MOVING_CLOSE。
+                        // 启动失败时安全启动函数已经停车并记录故障，不能改成 MOVING_CLOSE
                         return actuator_status;
                     }
 
-                    // 以本周期快照作为关方向运动的超时与堵转监测起点。
+                    // 记下刚启动时的位置和时间，后续用来判断有没有转动和是否超时
                     p_actuator_handle->last_encoder_position = p_input->encoder_position;
                     p_actuator_handle->last_encoder_change_time_ms = p_input->now_ms;
                     p_actuator_handle->motion_start_time_ms = p_input->now_ms;
-                    // 所有启动与监测基准准备完成后，最后提交“向关端运动”状态。
+                    // 电机已启动且监测起点已记好，现在才标记为正在向关端运动
                     p_actuator_handle->current_state = ACTUATOR_STATE_MOVING_CLOSE;
                     break;
                 }
 
                 default:
                 {
-                    // 枚举范围外的命令不能静默忽略；安全停车后锁存命令输入异常。
+                    // 命令值不是已定义的几种，不能当作普通命令处理，停车并报错
                     return Actuator_EnterFault(p_actuator_handle,
                                                ACTUATOR_FAULT_COMMAND_INVALID);
                 }
             }
             break;
         }
+        case ACTUATOR_STATE_MOVING_OPEN://向‘开’端移动的命令
+        {
+            /*判断编码器读数是否有效*/
+            if (false == p_input->encoder_valid)
+            {   
+                return Actuator_EnterFault(p_actuator_handle,ACTUATOR_FAULT_ENCODER_UPDATE_ERROR);
+            }
+            /*限位器稳定情况下是否是到达“开”端*/
+            if ((true == p_input->limit_stable) && (LIMIT_STATE_OPEN_ACTIVE == p_input->limit_state))
+            {
+                actuator_status = Actuator_ExecuteSafeStop(p_actuator_handle->motor);
+                if (ACTUATOR_STATUS_OK  != actuator_status)
+                {
+                    Actuator_LatchFault(p_actuator_handle,
+                                        ACTUATOR_FAULT_MOTOR_DRIVER_ERROR);
+                    return ACTUATOR_STATUS_ERR_MOTOR;                    
+                }
+                /*如果是，当前状态更新为已经到达‘开’端*/
+                p_actuator_handle->current_state = ACTUATOR_STATE_AT_OPEN;
+                return ACTUATOR_STATUS_OK;
+            }
+
+
+            /*关限位释放超时判定，当前是往开方向，所以要判定相反的关方向的限位器是否健康释放*/
+            if ((true == p_input->limit_stable) && (LIMIT_STATE_CLOSE_ACTIVE == p_input->limit_state) &&
+                (p_input->now_ms - p_actuator_handle->motion_start_time_ms) >= p_actuator_handle->config->limit_release_timeout_ms)
+            {
+                return Actuator_EnterFault(p_actuator_handle,ACTUATOR_FAULT_LIMIT_CLOSE_STUCK);                
+            }
+
+
+            /*判断是否超过开向总行程时间*/
+            if((p_input->now_ms - p_actuator_handle->motion_start_time_ms) >= p_actuator_handle->config->travel_open_timeout_ms)
+            {
+                return Actuator_EnterFault(p_actuator_handle,ACTUATOR_FAULT_TRAVEL_TIMEOUT_OPEN);
+            }
+
+            
+            /*是否仍在启动宽限；若否，再检查编码器堵转*/
+            if ((p_input->now_ms - p_actuator_handle->motion_start_time_ms) <= p_actuator_handle->config->encoder_startup_grace_ms)
+            {   /*在宽启动宽限的情况下直接更新数据即可*/
+                p_actuator_handle->last_encoder_position = p_input->encoder_position;
+                p_actuator_handle->last_encoder_change_time_ms = p_input->now_ms;
+            }
+            else
+            {   /*如果不在了，就要检查是否真的再动*/
+                int64_t difference_value_of_encoder_position =(int64_t)(p_input->encoder_position - (int64_t)p_actuator_handle->last_encoder_position);
+                if (difference_value_of_encoder_position < 0) difference_value_of_encoder_position *= -1ll;
+
+                /*如果在动（健康），那么就照样更新数据*/
+                if (difference_value_of_encoder_position >= p_actuator_handle->config->encoder_min_delta)
+                {
+                    p_actuator_handle->last_encoder_position = p_input->encoder_position;
+                    p_actuator_handle->last_encoder_change_time_ms = p_input->now_ms;                
+                }
+                else/*否则就判定是否堵转，并且上报*/
+                {   
+                    /*一旦不动的时间达到判定堵转的阈值就上报堵转*/
+                    if ((p_input->now_ms - p_actuator_handle->last_encoder_change_time_ms) >= p_actuator_handle->config->encoder_stall_timeout_ms)
+                    {
+                        return Actuator_EnterFault(p_actuator_handle, ACTUATOR_FAULT_ENCODER_STALL);
+                    }
+                }                
+            }
+
+
+            /*命令判断*/
+            switch (p_input->command)
+            {
+                case ACTUATOR_CMD_NONE:
+                {
+                    /*忽略*/
+                    break;
+                }
+                case ACTUATOR_CMD_OPEN:
+                {
+                    /*忽略*/
+                    break;
+                }
+                case ACTUATOR_CMD_CLOSE:
+                {
+                    // 运运行中收到反向 CLOSE，不能直接反转，先停止失能，进入 IDLE，等待下一条 CLOSE，立即请求停止和失能，请求停止和失能，保证 STOP 命令一定生效
+                    actuator_status = Actuator_ExecuteSafeStop(p_actuator_handle->motor);
+                    if (ACTUATOR_STATUS_OK != actuator_status)
+                    {
+                        // Stop 或 Disable 失败时已经尝试强制关闭硬件，这里只记录故障
+                        Actuator_LatchFault(p_actuator_handle,
+                                            ACTUATOR_FAULT_MOTOR_DRIVER_ERROR);
+                        return ACTUATOR_STATUS_ERR_MOTOR;
+                    }                    
+                    p_actuator_handle->current_state = ACTUATOR_STATE_IDLE;
+                    break;
+                }
+                case ACTUATOR_CMD_STOP:
+                {
+                    // 运行中收到 STOP，立即停止并失能,请求停止和失能，保证 STOP 命令一定生效
+                    actuator_status = Actuator_ExecuteSafeStop(p_actuator_handle->motor);
+                    if (ACTUATOR_STATUS_OK != actuator_status)
+                    {
+                        // Stop 或 Disable 失败时已经尝试强制关闭硬件，这里只记录故障
+                        Actuator_LatchFault(p_actuator_handle,
+                                            ACTUATOR_FAULT_MOTOR_DRIVER_ERROR);
+                        return ACTUATOR_STATUS_ERR_MOTOR;
+                    }                    
+                    p_actuator_handle->current_state = ACTUATOR_STATE_IDLE;
+                    break;
+                }
+                case ACTUATOR_CMD_CLEAR_FAULT:
+                {   /*忽略*/
+                    break;
+                }        
+                default:
+                {
+                    // 命令值不是已定义的几种，不能当作普通命令处理，停车并报错
+                    return Actuator_EnterFault(p_actuator_handle,
+                                               ACTUATOR_FAULT_COMMAND_INVALID);                    
+                }                                        
+            }
+            return ACTUATOR_STATUS_OK;
+        }        
+        case ACTUATOR_STATE_MOVING_CLOSE://向“关”端移动的命令
+        {
+            /*判断编码器读数是否有效*/
+            if (false == p_input->encoder_valid)
+            {   
+                return Actuator_EnterFault(p_actuator_handle,ACTUATOR_FAULT_ENCODER_UPDATE_ERROR);
+            }
+
+            /*限位器稳定情况下是否是到达“关”端*/
+            if ((true == p_input->limit_stable) && (LIMIT_STATE_CLOSE_ACTIVE == p_input->limit_state))
+            {
+                actuator_status = Actuator_ExecuteSafeStop(p_actuator_handle->motor);
+                if (ACTUATOR_STATUS_OK  != actuator_status)
+                {
+                    Actuator_LatchFault(p_actuator_handle,
+                                        ACTUATOR_FAULT_MOTOR_DRIVER_ERROR);
+                    return ACTUATOR_STATUS_ERR_MOTOR;                    
+                }
+                /*如果是，当前状态更新为已经到达“关”端*/
+                p_actuator_handle->current_state = ACTUATOR_STATE_AT_CLOSE;
+                return ACTUATOR_STATUS_OK;
+            }
+
+            /*开限位释放超时判定，当前是往关方向，所以要判定原来的开限位是否健康释放*/
+            if ((true == p_input->limit_stable) && (LIMIT_STATE_OPEN_ACTIVE == p_input->limit_state) &&
+                (p_input->now_ms - p_actuator_handle->motion_start_time_ms) >= p_actuator_handle->config->limit_release_timeout_ms)
+            {
+                return Actuator_EnterFault(p_actuator_handle,ACTUATOR_FAULT_LIMIT_OPEN_STUCK);                
+            }
+
+            /*判断是否超过关向总行程时间*/
+            if((p_input->now_ms - p_actuator_handle->motion_start_time_ms) >= p_actuator_handle->config->travel_close_timeout_ms)
+            {
+                return Actuator_EnterFault(p_actuator_handle,ACTUATOR_FAULT_TRAVEL_TIMEOUT_CLOSE);
+            }
+
+            /*是否仍在启动宽限；若否，再检查编码器堵转*/
+            if ((p_input->now_ms - p_actuator_handle->motion_start_time_ms) <= p_actuator_handle->config->encoder_startup_grace_ms)
+            {   /*在启动宽限的情况下直接更新数据即可*/
+                p_actuator_handle->last_encoder_position = p_input->encoder_position;
+                p_actuator_handle->last_encoder_change_time_ms = p_input->now_ms;
+            }
+            else
+            {   /*如果不在了，就要检查是否真的在动*/
+                int64_t difference_value_of_encoder_position =(int64_t)(p_input->encoder_position - (int64_t)p_actuator_handle->last_encoder_position);
+
+                if (difference_value_of_encoder_position < 0) difference_value_of_encoder_position *= -1ll;
+
+                /*如果在动（健康），那么就照样更新数据*/
+                if (difference_value_of_encoder_position >= p_actuator_handle->config->encoder_min_delta)
+                {
+                    p_actuator_handle->last_encoder_position = p_input->encoder_position;
+                    p_actuator_handle->last_encoder_change_time_ms = p_input->now_ms;                
+                }
+                else/*否则就判定是否堵转，并且上报*/
+                {
+                    if ((p_input->now_ms - p_actuator_handle->last_encoder_change_time_ms) >= p_actuator_handle->config->encoder_stall_timeout_ms)
+                    {
+                        return Actuator_EnterFault(p_actuator_handle, ACTUATOR_FAULT_ENCODER_STALL);
+                    }
+                }
+            }
+
+            /*命令判断*/
+            switch (p_input->command)
+            {
+                case ACTUATOR_CMD_NONE:
+                {
+                    /*忽略*/
+                    break;
+                }
+                case ACTUATOR_CMD_CLOSE:
+                {
+                    /*忽略*/
+                    break;
+                }
+                case ACTUATOR_CMD_OPEN:
+                {
+                    // 运行中收到反向 OPEN，不能直接反转，先停止失能，进入 IDLE，等待下一条 OPEN
+                    actuator_status = Actuator_ExecuteSafeStop(p_actuator_handle->motor);
+                    if (ACTUATOR_STATUS_OK != actuator_status)
+                    {
+                        // Stop 或 Disable 失败时已经尝试强制关闭硬件，这里只记录故障
+                        Actuator_LatchFault(p_actuator_handle,
+                                            ACTUATOR_FAULT_MOTOR_DRIVER_ERROR);
+                        return ACTUATOR_STATUS_ERR_MOTOR;
+                    }                    
+                    p_actuator_handle->current_state = ACTUATOR_STATE_IDLE;
+                    break;
+                }
+                case ACTUATOR_CMD_STOP:
+                {
+                    // 运行中收到 STOP，立即停止并失能
+                    actuator_status = Actuator_ExecuteSafeStop(p_actuator_handle->motor);
+                    if (ACTUATOR_STATUS_OK != actuator_status)
+                    {
+                        // Stop 或 Disable 失败时已经尝试强制关闭硬件，这里只记录故障
+                        Actuator_LatchFault(p_actuator_handle,
+                                            ACTUATOR_FAULT_MOTOR_DRIVER_ERROR);
+                        return ACTUATOR_STATUS_ERR_MOTOR;
+                    }                    
+                    p_actuator_handle->current_state = ACTUATOR_STATE_IDLE;
+                    break;
+                }
+                case ACTUATOR_CMD_CLEAR_FAULT:
+                {   /*忽略*/
+                    break;
+                }
+                default:
+                {
+                    // 命令值不是已定义的几种，不能当作普通命令处理，停车并报错
+                    return Actuator_EnterFault(p_actuator_handle,
+                                               ACTUATOR_FAULT_COMMAND_INVALID);                    
+                }
+            }
+
+            return ACTUATOR_STATUS_OK;
+        }
         case ACTUATOR_STATE_FAULT:
         {
-            // 故障锁存后绝不因通信恢复或普通命令自动恢复；明天补 CLEAR_FAULT 条件。
+            // 进入故障后不因普通命令自动恢复，明天再补清故障的条件
             return ACTUATOR_STATUS_OK;
         }
         default:
         {
-            // MOVING/AT_* 尚未实现；状态机核心完成前不得下载进行电机联调。
+            // MOVING 和 AT 状态还没写，完成前不能下载到板子上带电机测试
             break;
         }
     }
