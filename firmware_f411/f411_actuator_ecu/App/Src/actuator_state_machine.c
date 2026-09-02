@@ -71,6 +71,107 @@ static ActuatorStatus_t Actuator_EnterFault(ActuatorHandle_t *p_actuator_handle,
 }
 
 /**
+ * @brief 判断当前锁存故障是否已经满足人工清除条件
+ * @param[in] p_actuator_handle 已进入 FAULT 的执行器状态机对象
+ * @param[in] p_input 本周期已组装完成的限位、编码器与通信输入快照
+ * @return true 当前故障条件已经消失，调用者可以清除故障锁存
+ * @return false 故障条件仍存在或无法确认恢复，调用者必须继续保持 FAULT
+ * @pre p_actuator_handle 和 p_input 已由 Actuator_Update() 完成判空
+ * @pre 调用者当前只在收到 ACTUATOR_CMD_CLEAR_FAULT 时调用本函数
+ * @note 本函数只读取状态和输入，不调用 Motor_*，不修改状态机状态或故障码
+ */
+static bool Actuator_CanClearFault(const ActuatorHandle_t *p_actuator_handle,
+                                   const ActuatorInput_t *p_input)
+{
+    /*任一关键输入仍不可信时，清除后不能安全地接受下一条运动命令*/
+    if ((false == p_input->limit_read_valid) || // 本周期未读到限位，无法确认机构是否仍在端点
+        (false == p_input->limit_stable) || // 去抖未完成，当前限位可能只是瞬态抖动
+        (LIMIT_STATE_CONFLICT == p_input->limit_state) || // 双限位矛盾仍存在，机构或线路尚未恢复
+        (false == p_input->encoder_valid)) // 编码器无效，清除后无法监测下一次运动是否堵转
+    {
+        return false;
+    }
+
+    switch (p_actuator_handle->latched_fault)
+    {
+        case ACTUATOR_FAULT_NONE:
+        {
+            // 已处于 FAULT 却没有故障原因，状态数据不一致，拒绝冒险清除
+            return false;
+        }
+        case ACTUATOR_FAULT_MOTOR_DRIVER_ERROR:
+        {
+            // 没有可靠的驱动器恢复反馈，必须重新初始化后才允许恢复
+            return false;
+        }
+        case ACTUATOR_FAULT_LIMIT_OPEN_STUCK:
+        {
+            // 向关端运动后开限位必须已经释放，否则开限位或线路仍卡住
+            return (LIMIT_STATE_OPEN_ACTIVE != p_input->limit_state);
+        }
+        case ACTUATOR_FAULT_LIMIT_CLOSE_STUCK:
+        {
+            // 向开端运动后关限位必须已经释放，否则关限位或线路仍卡住
+            return (LIMIT_STATE_CLOSE_ACTIVE != p_input->limit_state);
+        }
+        case ACTUATOR_FAULT_COMMAND_TIMEOUT:
+        {
+            // 通信层必须重新确认继续运动授权有效，不能只因收到清故障命令就恢复
+            return p_input->communication_alive;
+        }
+        case ACTUATOR_FAULT_LIMIT_CONFLICT:
+        {
+            // 前面的公共检查已确认双限位冲突解除
+            return true;
+        }
+        case ACTUATOR_FAULT_LIMIT_INPUT_INVALID:
+        {
+            // 前面的公共检查已确认限位读取重新有效且完成去抖
+            return true;
+        }
+        case ACTUATOR_FAULT_LIMIT_OPEN_POSITION_LOST:
+        {
+            // 当前限位输入已经可信，清除后由调用者按当前限位重新确定位置状态
+            return true;
+        }
+        case ACTUATOR_FAULT_LIMIT_CLOSE_POSITION_LOST:
+        {
+            // 当前限位输入已经可信，清除后由调用者按当前限位重新确定位置状态
+            return true;
+        }
+        case ACTUATOR_FAULT_ENCODER_UPDATE_ERROR:
+        {
+            // 前面的公共检查已确认编码器本周期重新可用
+            return true;
+        }
+        case ACTUATOR_FAULT_ENCODER_STALL:
+        {
+            // 停机时无法自动证明机械阻力已排除，人工确认后允许清除但不会自动重启
+            return true;
+        }
+        case ACTUATOR_FAULT_COMMAND_INVALID:
+        {
+            // 调用本函数时当前命令已经是合法的 CLEAR_FAULT，说明命令输入已恢复
+            return true;
+        }
+        case ACTUATOR_FAULT_TRAVEL_TIMEOUT_OPEN:
+        {
+            // 停机时无法自动确认行程异常已排除，人工检查后允许清除但不会自动重启
+            return true;
+        }
+        case ACTUATOR_FAULT_TRAVEL_TIMEOUT_CLOSE:
+        {
+            // 停机时无法自动确认行程异常已排除，人工检查后允许清除但不会自动重启
+            return true;
+        }
+        default:
+        {
+            // 未定义的故障码没有恢复策略，默认拒绝清除
+            return false;
+        }
+    }
+}
+/**
  * @brief 按已配置的方向和占空比安全启动电机。
  * @param[in,out] p_actuator_handle 已初始化的执行器状态机对象。
  * @param[in] direction 本次运动对应的底层电机方向。
