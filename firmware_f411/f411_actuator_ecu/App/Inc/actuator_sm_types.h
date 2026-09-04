@@ -52,7 +52,8 @@ typedef enum
     ACTUATOR_FAULT_ENCODER_UPDATE_ERROR,//编码器驱动更新失败，例如底层读取失败、计数处理检测到不可接受的异常
     ACTUATOR_FAULT_ENCODER_STALL,//电机被命令运动，但经过启动宽限后编码器长期没有足够的计数变化；可能堵转、脱线或电机没转
     ACTUATOR_FAULT_COMMAND_TIMEOUT,//运动中长时间收不到有效命令心跳；F411 不再确认上位控制是否还在线，因此本地停车
-    ACTUATOR_FAULT_COMMAND_INVALID,//状态机收到枚举范围外的动作命令；命令源异常或输入数据损坏
+    ACTUATOR_FAULT_COMMAND_INVALID,//状态机收到枚举范围外的动作命令；命令源异常或输入数据损坏(外部传进来)
+    ACTUATOR_FAULT_STATE_INVALID,   // 状态机当前状态超出定义范围，无法确认电机是否仍被允许运动（状态机自己保存的当前状态不对）
     ACTUATOR_FAULT_TRAVEL_TIMEOUT_OPEN,//持续向开端运动，超过最大允许行程时间仍未触发开限位
     ACTUATOR_FAULT_TRAVEL_TIMEOUT_CLOSE,//原理同上
     ACTUATOR_FAULT_MOTOR_DRIVER_ERROR,//调用 Motor_SetDirection、Motor_SetDuty、Motor_Enable、Motor_Stop 或 Motor_Disable 接口返回失败
